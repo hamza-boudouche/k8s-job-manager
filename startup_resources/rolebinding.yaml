@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: event-creator-binding
+subjects:
+- kind: ServiceAccount
+  name: event-creator-sa
+roleRef:
+  kind: Role
+  name: event-creator-role
+  apiGroup: rbac.authorization.k8s.io
+
