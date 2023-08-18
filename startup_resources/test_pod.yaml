@@ -1,18 +1,52 @@
-apiVersion: v1
-kind: Pod
+# apiVersion: v1
+# kind: Pod
+# metadata:
+#   name: test-pod
+# spec:
+#   serviceAccountName: event-creator-sa
+#   restartPolicy: Never
+#   containers:
+#   - name: test-container
+#     image: jonlabelle/network-tools:latest
+#     # command: ["sleep", "infinity"]
+#     command: ["ls"]
+#     volumeMounts:
+#     - name: config-volume
+#       mountPath: /config
+#     lifecycle:
+#       preStop:
+#         exec:
+#           command: ["/bin/sh","-c","/config/create_event.sh myname 55c8aaf4-cab2-4257-9666-7e3c3c077fa1"]
+#   volumes:
+#   - name: config-volume
+#     configMap:
+#       name: prestop-script
+
+apiVersion: batch/v1
+kind: Job
 metadata:
-  name: test-pod
+  name: example-job
 spec:
-  serviceAccountName: event-creator-sa
-  containers:
-  - name: test-container
-    image: jonlabelle/network-tools:latest
-    command: ["sleep", "infinity"]
-    volumeMounts:
-    - name: config-volume
-      mountPath: /config
-  volumes:
-  - name: config-volume
-    configMap:
-      name: prestop-script
+  template:
+    metadata:
+      name: test-pod
+    spec:
+      serviceAccountName: event-creator-sa
+      restartPolicy: Never
+      containers:
+      - name: test-container
+        image: jonlabelle/network-tools:latest
+        # command: ["sleep", "infinity"]
+        command: ["ls"]
+        volumeMounts:
+        - name: config-volume
+          mountPath: /config
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh","-c","/config/create_event.sh myname 55c8aaf4-cab2-4257-9666-7e3c3c077fa1"]
+      volumes:
+      - name: config-volume
+        configMap:
+          name: prestop-script
 

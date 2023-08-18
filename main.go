@@ -7,36 +7,54 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 	"time"
 
-	// "github.com/google/uuid"
 	"path/filepath"
+
+	"github.com/google/uuid"
+
 	// "k8s.io/apimachinery/pkg/api/errors"
 	batchv1 "k8s.io/api/batch/v1"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 )
 
 func main() {
-	// get the time needed to create the uuid (seems too long)
-	// id := uuid.New()
-	// fmt.Println(id.String())
 
 	clientset := getClientSet()
 
 	initCluster(clientset)
+	jobId := uuid.New()
 
-	createJob(clientset, "test4-ls", "lsd")
+	createJob(clientset, jobId.String(), "ls")
+    /*
+	stream, err := getJobLogs(clientset, jobId.String())
+	if err != nil {
+		panic(err.Error())
+	}
+	defer stream.Close()
 
-	// var wg sync.WaitGroup
-	//
-	// wg.Add(1)
-	// go getJobLogs(clientset, "test3-ls", &wg)
-	// wg.Wait()
+	for {
+		buf := make([]byte, 2000)
+		numBytes, err := stream.Read(buf)
+		if numBytes == 0 {
+			continue
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println(string(buf[:numBytes]))
+		time.Sleep(time.Second)
+	}
+    */
 }
 
 func getClientSet() *kubernetes.Clientset {
@@ -142,77 +160,81 @@ func createJob(clientset *kubernetes.Clientset, name string, command string) {
 }
 
 type TerminatedStream struct {
-    stream io.ReadCloser
-    stop <-chan interface{}
+	stream io.ReadCloser
+	stop   <-chan interface{}
 }
 
 func NewTerminatedStream(stream io.ReadCloser, closer func(chan<- interface{})) TerminatedStream {
-    stopChannel := make(chan interface{})
-    tStream := TerminatedStream{
-        stream: stream,
-        stop: stopChannel,
-    }
-    go closer(stopChannel)
-    go func() {
-        <-stopChannel
-        tStream.Close()
-    }()
-    return tStream
+	stopChannel := make(chan interface{})
+	tStream := TerminatedStream{
+		stream: stream,
+		stop:   stopChannel,
+	}
+	go closer(stopChannel)
+	go func() {
+		<-stopChannel
+		tStream.Close()
+	}()
+	return tStream
 }
 
 func (ts *TerminatedStream) Read(p []byte) (int, error) {
-    return ts.stream.Read(p)
+	return ts.stream.Read(p)
 }
 
 func (ts *TerminatedStream) Close() error {
-    return ts.stream.Close()
+	return ts.stream.Close()
 }
 
-func getJobLogs(clientset *kubernetes.Clientset, name string, wg *sync.WaitGroup) (TerminatedStream, error) {
-	defer wg.Done()
+func getJobLogs(clientset *kubernetes.Clientset, name string) (TerminatedStream, error) {
 	pods, err := clientset.CoreV1().Pods("scheduler").List(context.TODO(), metav1.ListOptions{
-        LabelSelector: fmt.Sprintf("job-name=%s", name),
-    })
-    if err != nil {
-        panic(err)
-    }
-    if len(pods.Items) == 0 {
-        panic(errors.New("pod not found"))
-    }
-    podLogOptions := &apiv1.PodLogOptions{
-        Follow: true,
-    }
-    podLogRequest := clientset.CoreV1().Pods("scheduler").GetLogs(pods.Items[0].Name, podLogOptions)
+		LabelSelector: fmt.Sprintf("job-name=%s", name),
+	})
+	if err != nil {
+		panic(err)
+	}
+	if len(pods.Items) == 0 {
+		panic(errors.New("pod not found"))
+	}
+	podLogOptions := &apiv1.PodLogOptions{
+		Follow: true,
+	}
+	podLogRequest := clientset.CoreV1().Pods("scheduler").GetLogs(pods.Items[0].Name, podLogOptions)
 
 	stream, err := podLogRequest.Stream(context.TODO())
 	if err != nil {
 		panic(err)
 	}
-	// defer stream.Close()
-	//
-	// for {
-	// 	buf := make([]byte, 2000)
-	// 	numBytes, err := stream.Read(buf)
-	// 	if numBytes == 0 {
-	// 		continue
-	// 	}
-	// 	if err == io.EOF {
-	// 		break
-	// 	}
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// 	fmt.Println(string(buf[:numBytes]))
-	// 	time.Sleep(time.Second)
-	// }
 
-    closer := func(stop chan<- interface{}) {
-        defer close(stop)
-        // wait for the job to finish executing
-        // TODO: implement event listener to detect when the job completes
-        // this should be blocking code
-        stop <- nil
-    }
+	closer := func(stop chan<- interface{}) {
+		defer close(stop)
+		// wait for the job to finish executing
+		// TODO: implement event listener to detect when the job completes
+		// this should be blocking code
+		namespace := "scheduler"
+		factory := informers.NewSharedInformerFactoryWithOptions(clientset, time.Second*10, informers.WithNamespace(namespace))
+        // TODO: look at this
+		informer := factory.Core().V1().Events().Informer()
+		informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj interface{}) {
+				event := obj.(*apiv1.Event)
+				fmt.Printf("New event: %s\n", event.Message)
+			},
+			UpdateFunc: func(oldObj, newObj interface{}) {
+				// Handle event update
+			},
+			DeleteFunc: func(obj interface{}) {
+				// Handle event deletion
+			},
+		})
+
+		stopCh := make(chan struct{})
+		defer close(stopCh)
+
+		go informer.Run(stopCh)
+
+		stop <- nil
+	}
 
 	return NewTerminatedStream(stream, closer), nil
 }
